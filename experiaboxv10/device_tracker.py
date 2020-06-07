@@ -76,7 +76,7 @@ class ZteH369ADeviceScanner(DeviceScanner):
             return {'ip': filter_device.ip}
         return None
 
-    def _update_info(self):
+    def _update_info(self, connection_types=["WLAN", "LAN"]):
         """Ensure the information from the ZTE router is up to date.
         Return boolean if scanning successful.
         """
@@ -88,7 +88,7 @@ class ZteH369ADeviceScanner(DeviceScanner):
 
         token_url = 'http://{}/function_module/login_module/login_page/logintoken_lua.lua'.format(self.host)
         login_url = 'http://{}'.format(self.host)
-        data_url = 'http://{}/common_page/home_AssociateDevs_lua.lua?AccessMode=WLAN&_={}'.format(self.host, ts)
+        data_urls = ['http://{}/common_page/home_AssociateDevs_lua.lua?AccessMode={}&_={}'.format(self.host, con, ts) for con in connection_types]
 
         # Login to get the required cookies
         session.get(login_url)
@@ -100,8 +100,7 @@ class ZteH369ADeviceScanner(DeviceScanner):
         })
 
         # Get the data
-        data_page = session.get(data_url)
-        result_root = ET.fromstring(data_page.text)
+        data_pages = [session.get(url) for url in data_urls]
 
         # And log back out
         logout_url = 'http://{}'.format(self.host)
@@ -112,26 +111,37 @@ class ZteH369ADeviceScanner(DeviceScanner):
         })
 
         if result:
-            device_list = result_root.find('OBJ_ACCESSDEV_ID')
-
-            if device_list is None:
-                return False
-
             results = []
-            for device in device_list:
-                keys = device.findall('ParaName')
-                values = device.findall('ParaValue')
+            for data_page in data_pages:
+                results.extend(self._get_device_list(data_page))
 
-                result = {}
-                for index, key in enumerate(keys):
-                    value = values[index]
-
-                    if key.text in ['HostName', 'MACAddress', 'IPAddress']:
-                        result[key.text] = value.text or ''
-
-                results.append(Device(result['MACAddress'].upper(),result['HostName'], result['IPAddress']))
+            if len(results) == 0:
+                return False
 
             self.last_results = results
             return True
 
         return False
+
+    def _get_device_list(self, data_page):
+        result_root = ET.fromstring(data_page.text)
+        device_list = result_root.find('OBJ_ACCESSDEV_ID')
+
+        if device_list is None:
+            return []
+
+        results = []
+        for device in device_list:
+            keys = device.findall('ParaName')
+            values = device.findall('ParaValue')
+
+            result = {}
+            for index, key in enumerate(keys):
+                value = values[index]
+
+                if key.text in ['HostName', 'MACAddress', 'IPAddress']:
+                    result[key.text] = value.text or ''
+
+            results.append(Device(result['MACAddress'].upper(), result['HostName'], result['IPAddress']))
+
+        return results
